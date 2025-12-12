@@ -9,7 +9,7 @@ import MessageCard from './MessageCard';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
 // 🔑 REPLACE WITH YOUR TOKEN
-mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 if (!mapboxgl.accessToken) {
   console.error("❌ Mapbox Token missing! Check your frontend .env file.");
@@ -27,7 +27,7 @@ export interface Gratitude {
 }
 
 // Connect to backend (ensure the port matches your server)
-const socket: Socket = io("http://localhost:3001");
+const socket: Socket = io(API_URL);
 
 const ThankMap: React.FC = () => {
   // TypeScript Refs require the specific HTML element type
@@ -336,6 +336,7 @@ const createPulsingDot = (offset: number) => {
           message: props.message,
           lat: coords[1],
           lng: coords[0],
+          name: '',
           variant: props.variant
         };
 
