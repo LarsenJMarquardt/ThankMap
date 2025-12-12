@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+}
+
+html,
+body {
+  @apply bg-white dark:bg-gray-950;
+
+  @media (prefers-color-scheme: dark) {
+    color-scheme: dark;
+  }
+}
+
+@keyframes fadeInOut {
+  0% { opacity: 0; transform: translate(-50%, -90%); }
+  10% { opacity: 1; transform: translate(-50%, -100%); } /* Fade In quickly */
+  85% { opacity: 1; transform: translate(-50%, -100%); } /* Stay visible */
+  100% { opacity: 0; transform: translate(-50%, -110%); } /* Fade Out slowly */
+}
+
+/* The "Breathing Gold" Animation */
+@keyframes goldPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 215, 0, 0.2);
+    border-color: rgba(255, 215, 0, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 20px 5px rgba(255, 215, 0, 0.4); /* Glow expands */
+    border-color: rgba(255, 215, 0, 0.8); /* Border gets brighter */
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 215, 0, 0.2);
+    border-color: rgba(255, 215, 0, 0.3);
+  }
+}
+
+/* Helper class to apply it */
+.glow-card {
+  animation: goldPulse 3s infinite ease-in-out;
+}
