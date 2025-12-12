@@ -9,6 +9,11 @@ import MessageCard from './MessageCard';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
 // 🔑 REPLACE WITH YOUR TOKEN
+console.log("--------------------------------------");
+console.log("🌍 VITE_API_URL is:", import.meta.env.VITE_API_URL);
+console.log("🔌 Connecting to:", import.meta.env.VITE_API_URL || 'http://localhost:3001');
+console.log("--------------------------------------");
+
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 if (!mapboxgl.accessToken) {
