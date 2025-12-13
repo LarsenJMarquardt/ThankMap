@@ -24,7 +24,13 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:5173", // Make sure this matches your Frontend port!
+    origin: [
+      "http://localhost:5173",       // Your local dev environment (Vite default)
+      "http://localhost:5137",       // Your specific local port (if you use 5137)
+      "https://thankmap.vercel.app", // The Vercel deployment
+      "https://thankmap.com",        // Your production domain
+      "https://www.thankmap.com"     // Your production www
+    ],
     methods: ["GET", "POST"]
   }
 });
@@ -105,7 +111,7 @@ io.on('connection', async (socket) => {
   });
 });
 
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`✅ SERVER RUNNING on port ${PORT}`);
   console.log(`🔗 Connected to Supabase: ${supabaseUrl}`);
