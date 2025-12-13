@@ -15,6 +15,7 @@ console.log("🔌 Connecting to:", import.meta.env.VITE_API_URL || 'http://local
 console.log("--------------------------------------");
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
 if (!mapboxgl.accessToken) {
   console.error("❌ Mapbox Token missing! Check your frontend .env file.");
