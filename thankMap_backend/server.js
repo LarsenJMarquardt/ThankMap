@@ -10,6 +10,7 @@ const { createClient } = require('@supabase/supabase-js');
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 
+
 if (!supabaseUrl || !supabaseKey) {
   console.error("❌ CRITICAL ERROR: Missing Supabase URL or Key in .env file");
   process.exit(1);
@@ -21,6 +22,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 const app = express();
 app.use(cors());
 const server = http.createServer(app);
+const rateLimitMap = new Map();
 
 const io = new Server(server, {
   cors: {
@@ -40,14 +42,21 @@ io.on('connection', async (socket) => {
 
   // --- A. FETCH HISTORY ON CONNECT ---
   // Get the last 100 gratitudes to populate the map
+  console.log("🔍 Attempting to load history from Supabase...");
   const { data: history, error } = await supabase.rpc('get_gratitudes');
 
   if (error) {
     console.error("⚠️ Database Read Error:", error.message);
   } else {
-    // Now history comes back perfectly formatted!
-    // No need for that complex .map() logic anymore.
-    console.log("✅ Loaded history:", history.length, "items");
+    if (history.length === 0) {
+        console.log("⚠️ WARNING: 0 rows returned.");
+        console.log("   Possible Cause 1: The table is actually empty.");
+        console.log("   Possible Cause 2: RLS (Row Level Security) is on, but no Policy allows 'SELECT'.");
+    } else {
+        console.log("   Sample item:", history[0]); // Print one to verify structure
+        // Store in memory if that's how your app works
+        // existingGratitudes = data; 
+    }
     socket.emit('initial_data', history);
   }
 

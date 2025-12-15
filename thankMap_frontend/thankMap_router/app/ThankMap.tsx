@@ -60,7 +60,7 @@ const createPulsingDot = (offset: number) => {
       const canvas = document.createElement('canvas');
       canvas.width = this.width;
       canvas.height = this.height;
-      this.context = canvas.getContext('2d');
+      this.context = canvas.getContext('2d', {willReadFrequently: true});
     },
 
     render: function () {
@@ -176,28 +176,34 @@ const createPulsingDot = (offset: number) => {
         setIsMapLoaded(true);
 
         const totalVariants = 10; // We want 10 different types
-        const duration = 3000;    // The full breath cycle is 3 seconds
-        const interval = duration / totalVariants;
+        const interval = 300; // Time offset between dots
 
         // We cast pulsingDot as 'any' to bypass strict Mapbox StyleImageInterface typing 
         // which can be tricky with the custom render function
         for (let i = 0; i < totalVariants; i++) {
-          map.addImage(`dot-${i}`, createPulsingDot(i * interval) as any, { pixelRatio: 2 });
+          const id = `dot-${i}`;
+          if (!map.hasImage(id)) {
+            map.addImage(`dot-${i}`, createPulsingDot(i * interval) as any, { pixelRatio: 2 });
+          }
         }
 
-        map.addSource('gratitude-points', {
-          type: 'geojson',
-          data: { type: 'FeatureCollection', features: [] }
-        });
+        if (!map.getSource('gratitude-source')) {
+          map.addSource('gratitude-source', {
+            type: 'geojson',
+            data: { type: 'FeatureCollection', features: []},
+            cluster: false
+          });
+        }
 
         map.addLayer({
           id: 'gratitude-layer',
           type: 'symbol',
-          source: 'gratitude-points',
+          source: 'gratitude-source',
           layout: {
             // ⚠️ MAGIC: Choose the icon name dynamically based on data!
-            'icon-image': ['concat', 'dot-', ['get', 'variant']], 
-            'icon-allow-overlap': true
+            'icon-image': ['get', 'icon'], 
+            'icon-allow-overlap': true,
+            'icon-size': 0.7
           }
         });
 
@@ -244,23 +250,34 @@ const createPulsingDot = (offset: number) => {
     };
   }, []);
 
-  // 3. Update Data Effect
+// 3. Update Data Effect
   useEffect(() => {
     const map = mapRef.current;
-    if (!isMapLoaded || !map || !map.getSource('gratitude-points')) return;
+    if (!isMapLoaded || !map || !map.getSource('gratitude-source')) return;
 
-    const source = map.getSource('gratitude-points') as mapboxgl.GeoJSONSource;
-    
+    // Create GeoJSON from ALL gratitudes
     const geoJsonData: GeoJSON.FeatureCollection<GeoJSON.Geometry> = {
       type: 'FeatureCollection',
-      features: gratitudes.map(g => ({
+      features: gratitudes.map((g) => ({
         type: 'Feature',
-        geometry: { type: 'Point', coordinates: [g.lng, g.lat] },
-        properties: { message: g.message, id: g.id, variant: g.variant }
+        geometry: { 
+          type: 'Point', 
+          coordinates: [g.lng, g.lat] 
+        },
+        properties: { 
+          id: g.id, 
+          message: g.message, 
+          variant: g.variant,
+          // We construct the icon name here so Mapbox logic is simpler
+          icon: `dot-${g.variant}` 
+        }
       }))
     };
 
-    source.setData(geoJsonData);
+    const source = map.getSource('gratitude-source') as mapboxgl.GeoJSONSource;
+    if (source) {
+      source.setData(geoJsonData);
+    }
   }, [gratitudes, isMapLoaded]);
 
   // 4. Sticky Popup Logic
@@ -299,31 +316,33 @@ const createPulsingDot = (offset: number) => {
     };
   }, [selectedGratitude]); // Re-run if we select a different dot
 
-// 5. Polished Screensaver Logic (Fixes the flickering)
+// 5. Polished Screensaver Logic
   useEffect(() => {
-    // 1. Basic Setup
+    // A. Basic Setup
     if (!isAutoPlay) {
       mapRef.current?.stop();
-      return;
+      return; // Stop here if autoplay is off
     }
+    
     const map = mapRef.current;
     if (!map) return;
 
-    // --- A. The Spin (Visuals) ---
+    // B. The Spin (Visuals)
     let animationFrameId: number;
     const rotateCamera = () => {
-      if (!isAutoPlay) return;
+      // Double check active state inside the frame loop
+      if (!isAutoPlay) return; 
+      
       const currentCenter = map.getCenter();
-      const newLng = currentCenter.lng - 0.02; // Slow spin
+      const newLng = currentCenter.lng - 0.02;
       map.jumpTo({ center: [newLng, currentCenter.lat], zoom: 2 });
       animationFrameId = requestAnimationFrame(rotateCamera);
     };
-    rotateCamera(); // Start spinning
+    rotateCamera(); 
 
-    // --- B. The Spotlight (Lifecycle Manager) ---
-    // Instead of setInterval, we use a recursive setTimeout loop.
-    // This ensures Step 2 never starts until Step 1 is totally finished.
+    // C. The Spotlight (Lifecycle Manager)
     let spotlightTimer: NodeJS.Timeout;
+    let hideTimer: NodeJS.Timeout;
 
     const runSpotlightCycle = () => {
       if (!isAutoPlay) return;
@@ -332,7 +351,6 @@ const createPulsingDot = (offset: number) => {
       const features = map.queryRenderedFeatures({ layers: ['gratitude-layer'] });
 
       if (features.length > 0) {
-        // Pick random dot
         const randomFeature = features[Math.floor(Math.random() * features.length)];
         const props = randomFeature.properties as any;
         const coords = (randomFeature.geometry as any).coordinates;
@@ -346,63 +364,43 @@ const createPulsingDot = (offset: number) => {
           variant: props.variant
         };
 
-        // SHOW CARD
         setSelectedGratitude(spotlitGratitude);
 
-        // WAIT 5 SECONDS, THEN HIDE
-        spotlightTimer = setTimeout(() => {
-          setSelectedGratitude(null);
+        // 2. Wait 5 seconds, then HIDE
+        hideTimer = setTimeout(() => {
+          // Only close if it's still the SAME card (prevents closing if user clicked another)
+          setSelectedGratitude((current) => 
+            current?.id === spotlitGratitude.id ? null : current
+          );
 
-          // WAIT 1 SECOND (Buffer), THEN RESTART CYCLE
+          // 3. Wait 1 second buffer, then RESTART
           spotlightTimer = setTimeout(runSpotlightCycle, 1000); 
         }, 5000);
 
       } else {
-        // If no dots found (empty ocean), try again in 1 second
+        // No dots? Try again in 1 second
         spotlightTimer = setTimeout(runSpotlightCycle, 1000);
       }
     };
 
-    // Kick off the first cycle
+    // Start the loop
     runSpotlightCycle();
 
     // Cleanup
     return () => {
       cancelAnimationFrame(animationFrameId);
       clearTimeout(spotlightTimer);
+      clearTimeout(hideTimer);
       map.stop();
     };
-  }, [isAutoPlay]);
-  // 6. Event Listener Manager
-  // This attaches/detaches listeners so they always have the fresh 'isAutoPlay' value
-  useEffect(() => {
-    if (!mapRef.current) return;
-    const map = mapRef.current;
-
-    const handleInteraction = () => {
-      if (isAutoPlay) setIsAutoPlay(false);
-    };
-
-    // Attach listeners
-    map.on('mousedown', handleInteraction);
-    map.on('touchstart', handleInteraction);
-    map.on('dragstart', handleInteraction);
-    map.on('click', handleInteraction);
-
-    return () => {
-      // Detach listeners to prevent memory leaks
-      map.off('mousedown', handleInteraction);
-      map.off('touchstart', handleInteraction);
-      map.off('dragstart', handleInteraction);
-      map.off('click', handleInteraction);
-    };
-  }, [isAutoPlay]); // Re-bind whenever isAutoPlay changes
+  }, [isAutoPlay]); // Dependency on isAutoPlay ensures this resets correctly
 
   useEffect(() => {
     if (!isAutoPlay || gratitudes.length === 0) return;
 
 const pickVisibleGratitude = () => {
     const map = mapRef.current;
+    if (!map?.isStyleLoaded()) return;
     if (!map) return;
 
     // 1. Ask the GPU: "Which dots are currently visible on screen?"
@@ -453,16 +451,6 @@ const pickVisibleGratitude = () => {
 
     // 2. Send to server
     socket.emit('submit_gratitude', data);
-
-  // 2. Fly map to user's location so they see the blink!
-  // if (mapRef.current) {
-  //   mapRef.current.flyTo({
-  //     center: [data.lng, data.lat],
-  //     zoom: 5,
-  //     speed: 1.5,
-  //     curve: 1
-  //   });
-  // }
 };
 
   return (
