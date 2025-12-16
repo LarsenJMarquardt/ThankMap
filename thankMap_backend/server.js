@@ -10,6 +10,8 @@ const { createClient } = require('@supabase/supabase-js');
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 
+const xss = require("xss");
+
 
 if (!supabaseUrl || !supabaseKey) {
   console.error("❌ CRITICAL ERROR: Missing Supabase URL or Key in .env file");
@@ -63,8 +65,13 @@ io.on('connection', async (socket) => {
   // --- B. HANDLE NEW SUBMISSIONS ---
   socket.on('submit_gratitude', async (incomingData) => {
 
-    if (!incomingData || typeof incomingData.message !== 'string' || typeof incomingData.lat !== 'number', typeof incomingData.lng !== 'number') {
+    if (!incomingData || typeof incomingData.message !== 'string' || typeof incomingData.lat !== 'number' || typeof incomingData.lng !== 'number') {
        return;
+    }
+
+    // 3. FIX: Validate coordinate ranges (Postgres will error if out of bounds, but better to catch here)
+    if (incomingData.lat < -90 || incomingData.lat > 90 || incomingData.lng < -180 || incomingData.lng > 180) {
+        return;
     }
 
     const ip = socket.handshake.address;
@@ -77,7 +84,7 @@ io.on('connection', async (socket) => {
     }
     rateLimitMap.set(ip, now); // Update time
 
-    const cleanMessage = incomingData.message.substring(0, 280); 
+    const cleanMessage = xss(incomingData.message).substring(0, 280); 
 
 
     const { data: savedRow, error: insertError } = await supabase
