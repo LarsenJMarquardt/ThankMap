@@ -1,6 +1,7 @@
 {
   "name": "thankmap_backend",
   "version": "1.0.0",
+  "type": "module",
   "description": "Express server backend for the ThankMap application.",
   "main": "index.js",
   "scripts": {
@@ -13,6 +14,7 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "nanoid": "^3.3.11",
     "socket.io": "^4.8.1",
     "xss": "^1.0.15"
   }

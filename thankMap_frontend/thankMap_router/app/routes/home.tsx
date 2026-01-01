@@ -1,6 +1,6 @@
 // app/routes/home.tsx
 import type { Route } from "./+types/home";
-import ThankMap from "../ThankMap"; // Import from the parent app folder
+import ThankMap from "../components/ThankMap"; // Import from the parent app folder
 
 export function meta({}: Route.MetaArgs) {
   return [

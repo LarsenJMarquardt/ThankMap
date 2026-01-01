@@ -24,7 +24,7 @@ const GratitudeForm: React.FC<GratitudeFormProps> = ({ onSubmit }) => {
     setLoading(true);
 
     if (!navigator.geolocation) {
-      alert("Geolocation is not supported by your browser");
+      alert("Geolocation is not turned on for your browser");
       setLoading(false);
       return;
     }

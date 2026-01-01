@@ -1,14 +1,11 @@
-// app/ThankMap.tsx
 import React, { useRef, useEffect, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
 import io, { Socket } from 'socket.io-client';
 import GratitudeForm from './GratitudeForm';
 import MessageCard from './MessageCard';
 
-// ⚠️ REQUIRED: Mapbox CSS
 import 'mapbox-gl/dist/mapbox-gl.css';
 
-// 🔑 REPLACE WITH YOUR TOKEN
 console.log("--------------------------------------");
 console.log("🌍 VITE_API_URL is:", import.meta.env.VITE_API_URL);
 console.log("🔌 Connecting to:", import.meta.env.VITE_API_URL || 'http://localhost:3001');
@@ -24,31 +21,35 @@ if (!mapboxgl.accessToken) {
 // Define the shape of a Gratitude object
 export interface Gratitude {
   id: number;
-  name: string;
+  name?: string;
   message: string;
   lat: number;
   lng: number;
   variant: number;
-  tempId?: string; // Add tempId as an optional property
+  tempId?: string;
+  short_code?: string;
 }
 
-// Connect to backend (ensure the port matches your server)
+interface ThankMapProps {
+  initialFocus?: Gratitude | null; // Optional prop
+}
+
+// Connect to backend
 const socket: Socket = io(API_URL);
 
-const ThankMap: React.FC = () => {
-  // TypeScript Refs require the specific HTML element type
+export default function ThankMap({ initialFocus }: ThankMapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const popupRef = useRef<HTMLDivElement>(null);
   const pendingMessageRef = useRef<string | null>(null);
   const pendingIdRef = useRef<string | null>(null);
+
   const [gratitudes, setGratitudes] = useState<Gratitude[]>([]);
   const [selectedGratitude, setSelectedGratitude] = useState<Gratitude | null>(null);
   const [isMapLoaded, setIsMapLoaded] = useState(false);
   const [isAutoPlay, setIsAutoPlay] = useState(false);
 
 // 1. The Dot Factory
-// We pass an 'offset' (in ms) to shift the breathing cycle
 const createPulsingDot = (offset: number) => {
   return {
     width: 120,
@@ -65,10 +66,7 @@ const createPulsingDot = (offset: number) => {
 
     render: function () {
       const duration = 3000;
-      // THE FIX: Add the unique offset to the current time
       const t = (performance.now() + offset) / duration; 
-
-      // Smooth Breathing Math
       const tSmooth = (Math.sin(t * Math.PI * 2) + 1) / 2;
 
       const centerX = this.width / 2;
@@ -109,14 +107,15 @@ const createPulsingDot = (offset: number) => {
   };
 };
 
-  // 2. Initialize Map & Socket
+  // 2. Initialize Map & Socket Listener
   useEffect(() => {
     // A. Socket Listeners
-    socket.on('initial_data', (data: Gratitude[]) => {
+    socket.on('update_map_dots', (data: Gratitude[]) => {
+      console.log("🔥 RECEIVED DOTS FROM SERVER:", data.length);
         const enrichedData = data.map(g => ({
           ...g,
           // ✅ CORRECT: Assign random variant once when data loads
-        variant: g.variant !== undefined ? g.variant : Math.floor(Math.random() * 10)
+        variant: g.variant !== undefined ? g.variant : (g.id % 10)
       }));
       setGratitudes(enrichedData);
     });
@@ -124,19 +123,13 @@ const createPulsingDot = (offset: number) => {
     socket.on('new_blink', (newGratitude: Gratitude) => {
       const enrichedGratitude = {
         ...newGratitude,
-        // ✅ CORRECT: Assign random variant once when new blink arrives
         variant: Math.floor(Math.random() * 10) // Random 0-9
       };
       setGratitudes((prev) => [...prev, enrichedGratitude]);
 
-      // ✨ AUTO-OPEN LOGIC:
-      // If this incoming message matches what we just typed.
-
       if (pendingIdRef.current === newGratitude.tempId) {
         // 1. Open the card
         setSelectedGratitude(enrichedGratitude);
-
-        // 2. Clear the pending ref
         pendingMessageRef.current = null;
 
         // 3. Fly to it (Zoom in to see your creation)
@@ -155,10 +148,12 @@ const createPulsingDot = (offset: number) => {
       const map = new mapboxgl.Map({
         container: mapContainerRef.current,
         style: 'mapbox://styles/mapbox/dark-v11',
-        center: [0, 20],
-        zoom: 1.5,
+        center: initialFocus ? [initialFocus.lng, initialFocus.lat] : [0, 20],
+        zoom: initialFocus ? 6 : 1.5,
         projection: { name: 'globe' } as any
       });
+
+      mapRef.current = map;
 
       map.on('style.load', () => {
       map.setFog({
@@ -170,16 +165,11 @@ const createPulsingDot = (offset: number) => {
       });
     });
 
-      mapRef.current = map;
-
       map.on('load', () => {
         setIsMapLoaded(true);
 
         const totalVariants = 10; // We want 10 different types
         const interval = 300; // Time offset between dots
-
-        // We cast pulsingDot as 'any' to bypass strict Mapbox StyleImageInterface typing 
-        // which can be tricky with the custom render function
         for (let i = 0; i < totalVariants; i++) {
           const id = `dot-${i}`;
           if (!map.hasImage(id)) {
@@ -200,18 +190,16 @@ const createPulsingDot = (offset: number) => {
           type: 'symbol',
           source: 'gratitude-source',
           layout: {
-            // ⚠️ MAGIC: Choose the icon name dynamically based on data!
             'icon-image': ['get', 'icon'], 
             'icon-allow-overlap': true,
             'icon-size': 0.7
           }
         });
 
-        // 1. Change cursor to pointer when hovering over a dot
+        // Change & Click Handlers
         map.on('mouseenter', 'gratitude-layer', () => {
           map.getCanvas().style.cursor = 'pointer';
         });
-
         map.on('mouseleave', 'gratitude-layer', () => {
           map.getCanvas().style.cursor = '';
         });
@@ -219,43 +207,114 @@ const createPulsingDot = (offset: number) => {
         // 2. Handle the Click
         map.on('click', 'gratitude-layer', (e) => {
           if (!e.features || e.features.length === 0) return;
-
           const feature = e.features[0];
-
-          // Mapbox properties come back as strings/json, so we cast them
-          const properties = feature.properties as { message: string, id: number,  variant: number };
-
-          // Get coordinates to center the map slightly (optional polish)
+          const properties = feature.properties as any;
           const geometry = feature.geometry as any; // specific GeoJSON type casting can be tedious
           const coordinates = geometry.coordinates.slice();
 
-          // Update React State to show the card
           setSelectedGratitude({
             id: properties.id,
             message: properties.message,
             lat: coordinates[1],
             lng: coordinates[0],
             name: '',
-            variant: properties.variant, 
+            variant: properties.variant,
+            short_code: properties.short_code
+          });
+        });
+
+        if (map.isStyleLoaded()) {
+          const bounds = getSafeBounds(map);
+          if (!bounds) return;
+          socket.emit('map_bounds', {
+              north: bounds.north,
+              south: bounds.south,
+              east: bounds.east,
+              west: bounds.west
+          });
+        }
+
+        map.on('moveend', () => {
+          const bounds = getSafeBounds(map);
+          if (!bounds) return;
+          socket.emit('map_bounds', {
+              north: bounds.north,
+              south: bounds.south,
+              east: bounds.east,
+              west: bounds.west
           });
         });
       });
     }
 
-    // Cleanup
     return () => {
       mapRef.current?.remove();
-      socket.off('initial_data');
+      socket.off('update_map_dots');
       socket.off('new_blink');
     };
   }, []);
 
-// 3. Update Data Effect
+  const getSafeBounds = (map: mapboxgl.Map) => {
+  const bounds = map.getBounds();
+  if (!bounds) return;
+  let north = bounds.getNorth();
+  let south = bounds.getSouth();
+  let east = bounds.getEast();
+  let west = bounds.getWest();
+
+  // 1. ADD PADDING (Expand the search area by 20%)
+  // This ensures dots act as a buffer just off-screen
+  const latBuffer = (north - south) * 0.2;
+  const lngBuffer = (east - west) * 0.2;
+
+  north += latBuffer;
+  south -= latBuffer;
+  east += lngBuffer;
+  west -= lngBuffer;
+
+  // 2. CLAMP LATITUDE (Postgres crashes if > 90)
+  if (north > 90) north = 90;
+  if (south < -90) south = -90;
+
+  // 3. HANDLE LONGITUDE WRAPPING (The "World Wrap" fix)
+  // If the user zooms out far, West might be -200. We simply clamp to world limits.
+  // Ideally, you'd handle the dateline crossing, but for now, looking at the whole world is safer.
+  if (west < -180) west = -180;
+  if (east > 180) east = 180;
+  if (west > east) {
+     // If we cross the date line (e.g. West 170, East -170), 
+     // just ask for the whole world width to be safe for this MVP.
+     west = -180;
+     east = 180;
+  }
+
+  return { north, south, east, west };
+};
+
+// 3. Handle Shared Links
+  useEffect(() => {
+    if (initialFocus && isMapLoaded) {
+        console.log("Opening shared gratitude:", initialFocus);
+        
+        // Set the selected gratitude to open the card
+        setSelectedGratitude({
+            ...initialFocus,
+            variant: initialFocus.variant || 0 // Fallback
+        });
+
+        mapRef.current?.flyTo({
+            center: [initialFocus.lng, initialFocus.lat],
+            zoom: 6,
+            essential: true
+        });
+    }
+  }, [initialFocus, isMapLoaded]);
+
   useEffect(() => {
     const map = mapRef.current;
     if (!isMapLoaded || !map || !map.getSource('gratitude-source')) return;
 
-    // Create GeoJSON from ALL gratitudes
+    // 4. Create GeoJSON from ALL gratitudes
     const geoJsonData: GeoJSON.FeatureCollection<GeoJSON.Geometry> = {
       type: 'FeatureCollection',
       features: gratitudes.map((g) => ({
@@ -269,7 +328,8 @@ const createPulsingDot = (offset: number) => {
           message: g.message, 
           variant: g.variant,
           // We construct the icon name here so Mapbox logic is simpler
-          icon: `dot-${g.variant}` 
+          icon: `dot-${g.variant}`,
+          short_code: g.short_code,
         }
       }))
     };
@@ -280,59 +340,40 @@ const createPulsingDot = (offset: number) => {
     }
   }, [gratitudes, isMapLoaded]);
 
-  // 4. Sticky Popup Logic
+  // 5. Sticky Popup Logic
   useEffect(() => {
-    // If no card is selected, do nothing
     if (!selectedGratitude || !mapRef.current) return;
-
     const map = mapRef.current;
     
-    // Function to move the HTML card to the correct map pixel
     const updatePosition = () => {
       if (!popupRef.current) return;
-
       const coords = [selectedGratitude.lng, selectedGratitude.lat] as [number, number];
-      
-      // Mapbox math: convert Lat/Lng -> Screen Pixels (x,y)
       const point = map.project(coords);
-
-      // Directly update the DOM (bypassing React render for speed)
-      // We translate the card to the dot's pixel location
-      // The -50%, -100% in the CSS handles the centering alignment
       popupRef.current.style.transform = `translate(${point.x}px, ${point.y}px) translate(-50%, -100%)`;
     };
 
-    // 1. Position immediately
     updatePosition();
-
-    // 2. Reposition whenever the map moves (pan/zoom)
     map.on('move', updatePosition);
     map.on('moveend', updatePosition);
 
-    // Cleanup listener when the card closes
     return () => {
       map.off('move', updatePosition);
       map.off('moveend', updatePosition);
     };
-  }, [selectedGratitude]); // Re-run if we select a different dot
+  }, [selectedGratitude]);
 
-// 5. Polished Screensaver Logic
-  useEffect(() => {
-    // A. Basic Setup
+// 6. Screensaver Logic
+  useEffect(() => { 
     if (!isAutoPlay) {
       mapRef.current?.stop();
-      return; // Stop here if autoplay is off
+      return;
     }
-    
     const map = mapRef.current;
     if (!map) return;
 
-    // B. The Spin (Visuals)
     let animationFrameId: number;
     const rotateCamera = () => {
-      // Double check active state inside the frame loop
       if (!isAutoPlay) return; 
-      
       const currentCenter = map.getCenter();
       const newLng = currentCenter.lng - 0.02;
       map.jumpTo({ center: [newLng, currentCenter.lat], zoom: 2 });
@@ -346,8 +387,6 @@ const createPulsingDot = (offset: number) => {
 
     const runSpotlightCycle = () => {
       if (!isAutoPlay) return;
-
-      // 1. Find visible dots
       const features = map.queryRenderedFeatures({ layers: ['gratitude-layer'] });
 
       if (features.length > 0) {
@@ -366,24 +405,16 @@ const createPulsingDot = (offset: number) => {
 
         setSelectedGratitude(spotlitGratitude);
 
-        // 2. Wait 5 seconds, then HIDE
         hideTimer = setTimeout(() => {
-          // Only close if it's still the SAME card (prevents closing if user clicked another)
           setSelectedGratitude((current) => 
             current?.id === spotlitGratitude.id ? null : current
           );
-
-          // 3. Wait 1 second buffer, then RESTART
           spotlightTimer = setTimeout(runSpotlightCycle, 1000); 
         }, 5000);
-
       } else {
-        // No dots? Try again in 1 second
         spotlightTimer = setTimeout(runSpotlightCycle, 1000);
       }
     };
-
-    // Start the loop
     runSpotlightCycle();
 
     // Cleanup
@@ -391,67 +422,64 @@ const createPulsingDot = (offset: number) => {
       cancelAnimationFrame(animationFrameId);
       clearTimeout(spotlightTimer);
       clearTimeout(hideTimer);
-      map.stop();
+      map.stop(); 
     };
-  }, [isAutoPlay]); // Dependency on isAutoPlay ensures this resets correctly
+  }, [isAutoPlay]);
 
-  useEffect(() => {
-    if (!isAutoPlay || gratitudes.length === 0) return;
+//   useEffect(() => {
+//     if (!isAutoPlay || gratitudes.length === 0) return;
 
-const pickVisibleGratitude = () => {
-    const map = mapRef.current;
-    if (!map?.isStyleLoaded()) return;
-    if (!map) return;
+// const pickVisibleGratitude = () => {
+//     const map = mapRef.current;
+//     if (!map?.isStyleLoaded()) return;
+//     if (!map) return;
 
-    // 1. Ask the GPU: "Which dots are currently visible on screen?"
-    // This is much more accurate for a 3D globe than getBounds()
-    const features = map.queryRenderedFeatures({ layers: ['gratitude-layer'] });
+//     // 1. Ask the GPU: "Which dots are currently visible on screen?"
+//     // This is much more accurate for a 3D globe than getBounds()
+//     const features = map.queryRenderedFeatures({ layers: ['gratitude-layer'] });
 
-    if (features.length > 0) {
-      // 2. Pick a random one from the visible set
-      const randomFeature = features[Math.floor(Math.random() * features.length)];
+//     if (features.length > 0) {
+//       // 2. Pick a random one from the visible set
+//       const randomFeature = features[Math.floor(Math.random() * features.length)];
       
-      // 3. Extract the data (Mapbox flattens properties, so we parse them back)
-      // We need to match the shape of your Gratitude interface
-      const properties = randomFeature.properties as any;
-      const geometry = randomFeature.geometry as any;
-      const coords = geometry.coordinates; // [lng, lat]
+//       // 3. Extract the data (Mapbox flattens properties, so we parse them back)
+//       // We need to match the shape of your Gratitude interface
+//       const properties = randomFeature.properties as any;
+//       const geometry = randomFeature.geometry as any;
+//       const coords = geometry.coordinates; // [lng, lat]
 
-      const autoPickedGratitude = {
-        id: properties.id,
-        message: properties.message,
-        lat: coords[1],
-        lng: coords[0],
-        name: '',
-        variant: properties.variant
-      };
+//       const autoPickedGratitude = {
+//         id: properties.id,
+//         message: properties.message,
+//         lat: coords[1],
+//         lng: coords[0],
+//         name: '',
+//         variant: properties.variant
+//       };
 
-      // 4. Show it
-      setSelectedGratitude(autoPickedGratitude);
+//       // 4. Show it
+//       setSelectedGratitude(autoPickedGratitude);
 
-      // 5. Hide it after 6 seconds (Fade Out)
-      setTimeout(() => {
-        // Only clear if we are still looking at THIS gratitude 
-        // (prevents clearing a user-clicked one if they interrupted the screensaver)
-        setSelectedGratitude(current => (current?.id === autoPickedGratitude.id ? null : current));
-      }, 6000); 
-    }
-  };
+//       // 5. Hide it after 6 seconds (Fade Out)
+//       setTimeout(() => {
+//         // Only clear if we are still looking at THIS gratitude 
+//         // (prevents clearing a user-clicked one if they interrupted the screensaver)
+//         setSelectedGratitude(current => (current?.id === autoPickedGratitude.id ? null : current));
+//       }, 6000); 
+//     }
+//   };
 
-    // Run this logic every 7 seconds (6s display + 1s buffer)
-    const displayInterval = setInterval(pickVisibleGratitude, 7000);
+//     // Run this logic every 7 seconds (6s display + 1s buffer)
+//     const displayInterval = setInterval(pickVisibleGratitude, 7000);
 
-    return () => clearInterval(displayInterval);
-  }, [isAutoPlay, gratitudes]);
+//     return () => clearInterval(displayInterval);
+//   }, [isAutoPlay, gratitudes]);
 
   const handleGratitudeSubmit = (data: { message: string, lat: number, lng: number, tempId: string }) => {
-    // 1. Remember this message so we can auto-open it later
     pendingMessageRef.current = data.message;
     pendingIdRef.current = data.tempId;
-
-    // 2. Send to server
     socket.emit('submit_gratitude', data);
-};
+  };
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100vh' }}>
@@ -464,7 +492,7 @@ const pickVisibleGratitude = () => {
       {/* NEW: Render the card if a gratitude is selected */}
       {selectedGratitude && (
       <MessageCard 
-        ref={popupRef} // <--- Pass the ref here!
+        ref={popupRef}
         data={selectedGratitude} 
         onClose={() => setSelectedGratitude(null)} 
       />
@@ -494,5 +522,3 @@ const pickVisibleGratitude = () => {
     </div>
   );
 };
-
-export default ThankMap;
