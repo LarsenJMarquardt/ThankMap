@@ -24,12 +24,45 @@ const app = express();
 app.use(cors());
 const server = createServer(app);
 const rateLimitMap = new Map();
+const TARGET_DOTS_PER_VIEW = 100;
+const EARTH_RADIUS_KM = 6371;
+const SCRAMBLE_RADIUS_KM = 20;
+
+const normalizeLongitude = (lng) => {
+  return ((lng + 540) % 360) - 180;
+};
+
+const scrambleCoordinates = (lat, lng, radiusKm = SCRAMBLE_RADIUS_KM) => {
+  const distanceKm = Math.sqrt(Math.random()) * radiusKm;
+  const angularDistance = distanceKm / EARTH_RADIUS_KM;
+  const bearing = Math.random() * Math.PI * 2;
+
+  const latRad = (lat * Math.PI) / 180;
+  const lngRad = (lng * Math.PI) / 180;
+
+  const scrambledLatRad = Math.asin(
+    Math.sin(latRad) * Math.cos(angularDistance) +
+      Math.cos(latRad) * Math.sin(angularDistance) * Math.cos(bearing)
+  );
+
+  const scrambledLngRad =
+    lngRad +
+    Math.atan2(
+      Math.sin(bearing) * Math.sin(angularDistance) * Math.cos(latRad),
+      Math.cos(angularDistance) - Math.sin(latRad) * Math.sin(scrambledLatRad)
+    );
+
+  return {
+    lat: (scrambledLatRad * 180) / Math.PI,
+    lng: normalizeLongitude((scrambledLngRad * 180) / Math.PI)
+  };
+};
 
 const io = new Server(server, {
   cors: {
     origin: [
       "http://localhost:5173",       // Your local dev environment (Vite default)
-      "http://localhost:5137",       // Your specific local port (if you use 5137)
+      "http://localhost:3000",       // Your specific local port (if you use 5137)
       "https://thankmap.vercel.app", // The Vercel deployment
       "https://thankmap.com",        // Your production domain
       "https://www.thankmap.com"     // Your production www
@@ -79,10 +112,13 @@ io.on('connection', async (socket) => {
 
     if (error) {
       console.error("⚠️ Error fetching view dots:", error.message);
-    } else {
-      // 3. Send these specific 100 dots back to the client
-      socket.emit('update_map_dots', localGratitudes);
     }
+    // 3. Keep payload near 100 dots to match map density targets.
+    const boundedDots = Array.isArray(localGratitudes)
+      ? localGratitudes.slice(0, TARGET_DOTS_PER_VIEW)
+      : [];
+
+    socket.emit('update_map_dots', boundedDots);
   });
 
   // Backend route to fetch single gratitude by code
@@ -126,12 +162,13 @@ app.get('/share/:code', async (req, res) => {
     const now = Date.now();
 
     if (now - lastPostTime < 20000) { // Limit: 1 post every 20 seconds per IP
-       socket.emit('error_msg', "You are being too grateful! Please wait 10 seconds.");
+       socket.emit('error_msg', "You are being too grateful! Please wait 20 seconds.");
        return;
     }
     rateLimitMap.set(ip, now); // Update time
 
     const cleanMessage = xss(incomingData.message).substring(0, 280);
+    const scrambledCoords = scrambleCoordinates(incomingData.lat, incomingData.lng);
     
     const shortCode = nanoid(10); // Generates a secure, 10-char ID
 
@@ -139,7 +176,7 @@ app.get('/share/:code', async (req, res) => {
       .from('gratitudes')
       .insert({
         message: cleanMessage, // Use the clean version
-        location: `POINT(${incomingData.lng} ${incomingData.lat})`,
+        location: `POINT(${scrambledCoords.lng} ${scrambledCoords.lat})`,
         short_code: shortCode
       })
       .select()
@@ -156,17 +193,11 @@ app.get('/share/:code', async (req, res) => {
     // 2. Broadcast to all users
     // We send back exactly what the frontend needs
     if (savedRow) {
-      // 🛡️ OBFUSCATION: Add random jitter to the LIVE blink
-      // 0.1 degrees is roughly 11km. We subtract 0.05 to center the jitter.
-      const fuzzFactor = 0.1; 
-      const fuzzedLat = incomingData.lat + (Math.random() * fuzzFactor) - (fuzzFactor / 2);
-      const fuzzedLng = incomingData.lng + (Math.random() * fuzzFactor) - (fuzzFactor / 2);
-
       const broadcastData = {
         id: savedRow.id,
         message: savedRow.message,
-        lat: fuzzedLat,
-        lng: fuzzedLng,
+        lat: scrambledCoords.lat,
+        lng: scrambledCoords.lng,
         tempId: incomingData.tempId,
         short_code: savedRow.short_code
       };

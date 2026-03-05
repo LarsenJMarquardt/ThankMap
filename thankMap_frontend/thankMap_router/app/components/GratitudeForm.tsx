@@ -1,5 +1,5 @@
 // app/GratitudeForm.tsx
-import React, { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 
 interface SubmissionData {
     message: string;
@@ -12,7 +12,7 @@ interface GratitudeFormProps {
   onSubmit: (data: SubmissionData) => void;
 }
 
-const GratitudeForm: React.FC<GratitudeFormProps> = ({ onSubmit }) => {
+const GratitudeForm = ({ onSubmit }: GratitudeFormProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
@@ -50,7 +50,7 @@ const GratitudeForm: React.FC<GratitudeFormProps> = ({ onSubmit }) => {
   };
 
   // --- STYLES ---
-  const styles: Record<string, React.CSSProperties> = {
+  const styles: Record<string, CSSProperties> = {
     floatingBtn: {
       position: 'absolute',
       bottom: '40px',

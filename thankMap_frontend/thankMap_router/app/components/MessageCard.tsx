@@ -1,59 +1,136 @@
 import { type Gratitude } from "./ThankMap"
-import { forwardRef, useState } from 'react'; // Added useState
+import { useEffect, useRef, useState } from 'react';
+import mapboxgl from 'mapbox-gl';
 
 interface MessageCardProps {
   data: {
     message: string;
-    short_code?: string; // This is now used
+    short_code?: string;
     lat: number;
     lng: number;
     variant: number;
+    id: number;
   };
   onClose: () => void;
+  position?: number; // 0, 1, 2 for stacking
+  totalCards?: number; // How many cards total
 }
 
-const MessageCard = forwardRef<HTMLDivElement, MessageCardProps>( 
-  ({data, onClose}, ref ) => {
-    const [copyFeedback, setCopyFeedback] = useState(false);
+export default function MessageCard({ 
+  data, 
+  onClose, 
+  position = 0,
+  totalCards = 1 
+}: MessageCardProps) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [copyFeedback, setCopyFeedback] = useState(false);
 
-    const handleShare = (e: React.MouseEvent) => {
-      e.stopPropagation(); // Prevent map click
+  // ============================================================================
+  // POSITIONING LOGIC
+  // ============================================================================
 
-      if (data.short_code) {
-        // Build the link dynamically (works on localhost AND production)
-        const link = `${window.location.origin}/share/${data.short_code}`;
-        
-        navigator.clipboard.writeText(link).then(() => {
-          setCopyFeedback(true);
-          // Reset button text after 2 seconds
-          setTimeout(() => setCopyFeedback(false), 2000);
-        });
-      }
+  const getCardPosition = () => {
+    if (totalCards === 1) {
+      // Single card - center it
+      return {
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)'
+      };
+    }
+
+    // Multiple cards - arrange them in a row
+    const cardWidth = 320; // Card width + margin
+    const totalWidth = totalCards * cardWidth;
+    const startX = (window.innerWidth - totalWidth) / 2;
+
+    return {
+      top: '50%',
+      left: `${startX + (position * cardWidth)}px`,
+      transform: 'translateY(-50%)'
     };
+  };
 
-    return (
+  // ============================================================================
+  // SHARE HANDLER
+  // ============================================================================
+
+  const handleShare = (e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    if (data.short_code) {
+      const link = `${window.location.origin}/share/${data.short_code}`;
+      
+      navigator.clipboard.writeText(link).then(() => {
+        setCopyFeedback(true);
+        setTimeout(() => setCopyFeedback(false), 2000);
+      });
+    }
+  };
+
+  // ============================================================================
+  // STYLES
+  // ============================================================================
+
+  const cardStyle: React.CSSProperties = {
+    position: 'fixed',
+    ...getCardPosition(),
+    backgroundColor: 'rgba(20, 20, 20, 0.95)',
+    backdropFilter: 'blur(15px)',
+    padding: '25px',
+    borderRadius: '20px',
+    border: '1px solid rgba(255, 215, 0, 0.3)',
+    color: 'white',
+    width: '300px',
+    maxWidth: '90vw',
+    zIndex: 1500 + position, // Stack properly
+    boxShadow: '0 10px 40px rgba(0, 0, 0, 0.7), 0 0 20px rgba(255, 215, 0, 0.2)',
+    opacity: 1,
+    transition: 'all 0.3s ease-in-out',
+    animation: 'fadeIn 0.3s ease-in-out'
+  };
+
+  // ============================================================================
+  // RENDER
+  // ============================================================================
+
+  return (
+    <>
+      <style>
+        {`
+          @keyframes fadeIn {
+            from {
+              opacity: 0;
+              transform: translateY(-50%) scale(0.9);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(-50%) scale(1);
+            }
+          }
+
+          .glow-card {
+            box-shadow: 
+              0 10px 40px rgba(0, 0, 0, 0.7), 
+              0 0 20px rgba(255, 215, 0, 0.2),
+              inset 0 1px 0 rgba(255, 255, 255, 0.1);
+          }
+
+          .glow-card:hover {
+            border-color: rgba(255, 215, 0, 0.5);
+            box-shadow: 
+              0 15px 50px rgba(0, 0, 0, 0.8), 
+              0 0 30px rgba(255, 215, 0, 0.3),
+              inset 0 1px 0 rgba(255, 255, 255, 0.1);
+          }
+        `}
+      </style>
+
       <div 
-        ref={ref} 
+        ref={cardRef}
         className="glow-card"
-        style={{
-          position: 'absolute',
-          top: 0, 
-          left: 0,
-          willChange: 'transform',
-          backgroundColor: 'rgba(20, 20, 20, 0.90)',
-          backdropFilter: 'blur(10px)',
-          padding: '20px',
-          borderRadius: '15px',
-          border: '1px solid rgba(255, 215, 0, 0.4)',
-          color: 'white',
-          width: '300px',
-          zIndex: 1500,
-          boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
-          marginTop: '-20px', 
-          transform: 'translate(-50%, -100%)',
-          opacity: 1,
-          transition: 'opacity 0.3s ease-in-out'
-        }}
+        style={cardStyle}
+        onClick={(e) => e.stopPropagation()}
       >
         {/* Close Button */}
         <button 
@@ -63,74 +140,128 @@ const MessageCard = forwardRef<HTMLDivElement, MessageCardProps>(
           }}
           style={{
             position: 'absolute',
-            top: '5px',
+            top: '10px',
             right: '10px',
-            background: 'none',
-            border: 'none',
+            background: 'rgba(255, 255, 255, 0.05)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            borderRadius: '50%',
+            width: '28px',
+            height: '28px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
             color: '#888',
-            fontSize: '18px',
+            fontSize: '16px',
             cursor: 'pointer',
-            pointerEvents: 'auto'
+            transition: 'all 0.2s ease'
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
+            e.currentTarget.style.color = '#fff';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+            e.currentTarget.style.color = '#888';
           }}
         >
           ✕
         </button>
 
-        <h4 style={{ color: '#ffd700', margin: '0 0 8px 0', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px' }}>
-          Gratitude
+        {/* Header */}
+        <h4 
+          style={{ 
+            color: '#ffd700', 
+            margin: '0 0 15px 0', 
+            fontSize: '11px', 
+            textTransform: 'uppercase', 
+            letterSpacing: '2px',
+            fontWeight: 600
+          }}
+        >
+          💫 Gratitude
         </h4>
         
-        <p style={{ fontSize: '16px', lineHeight: '1.4', margin: '0 0 15px 0', fontStyle: 'italic' }}>
+        {/* Message */}
+        <p 
+          style={{ 
+            fontSize: '17px', 
+            lineHeight: '1.6', 
+            margin: '0 0 20px 0', 
+            fontStyle: 'italic',
+            color: '#e0e0e0'
+          }}
+        >
           "{data.message}"
         </p>
         
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
-            <div style={{ fontSize: '11px', color: '#666' }}>
-            Near {data.lat.toFixed(2)}, {data.lng.toFixed(2)}
-            </div>
+        {/* Footer */}
+        <div 
+          style={{ 
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: 'center',
+            paddingTop: '15px',
+            borderTop: '1px solid rgba(255, 255, 255, 0.05)'
+          }}
+        >
+          {/* Location */}
+          <div 
+            style={{ 
+              fontSize: '11px', 
+              color: '#666',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '5px'
+            }}
+          >
+            <span style={{ opacity: 0.5 }}>📍</span>
+            <span>{data.lat.toFixed(2)}, {data.lng.toFixed(2)}</span>
+          </div>
 
-            {/* NEW: Share Button */}
-            {data.short_code && (
-                <button 
-                    onClick={handleShare}
-                    style={{
-                        background: copyFeedback ? '#4CAF50' : 'rgba(255, 215, 0, 0.1)',
-                        border: copyFeedback ? '1px solid #4CAF50' : '1px solid #ffd700',
-                        color: copyFeedback ? 'white' : '#ffd700',
-                        borderRadius: '4px',
-                        padding: '4px 10px',
-                        fontSize: '12px',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s ease',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '5px'
-                    }}
-                >
-                    {copyFeedback ? (
-                        <>✓ Copied</>
-                    ) : (
-                        <>🔗 Share</>
-                    )}
-                </button>
-            )}
+          {/* Share Button */}
+          {data.short_code && (
+            <button 
+              onClick={handleShare}
+              style={{
+                background: copyFeedback 
+                  ? 'rgba(76, 175, 80, 0.2)' 
+                  : 'rgba(255, 215, 0, 0.1)',
+                border: copyFeedback 
+                  ? '1px solid #4CAF50' 
+                  : '1px solid rgba(255, 215, 0, 0.3)',
+                color: copyFeedback ? '#4CAF50' : '#ffd700',
+                borderRadius: '8px',
+                padding: '6px 12px',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+              onMouseEnter={(e) => {
+                if (!copyFeedback) {
+                  e.currentTarget.style.background = 'rgba(255, 215, 0, 0.2)';
+                  e.currentTarget.style.borderColor = 'rgba(255, 215, 0, 0.5)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!copyFeedback) {
+                  e.currentTarget.style.background = 'rgba(255, 215, 0, 0.1)';
+                  e.currentTarget.style.borderColor = 'rgba(255, 215, 0, 0.3)';
+                }
+              }}
+            >
+              {copyFeedback ? (
+                <>✓ Copied!</>
+              ) : (
+                <>🔗 Share</>
+              )}
+            </button>
+          )}
         </div>
-        
-        {/* Triangle Arrow */}
-        <div style={{
-          position: 'absolute',
-          bottom: '-8px',
-          left: '50%',
-          marginLeft: '-8px',
-          width: 0,
-          height: 0,
-          borderLeft: '8px solid transparent',
-          borderRight: '8px solid transparent',
-          borderTop: '8px solid rgba(255, 215, 0, 0.4)'
-        }} />
       </div>
-    );
-  }
-);
-
-export default MessageCard;
+    </>
+  );
+}
