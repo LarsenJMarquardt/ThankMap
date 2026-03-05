@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import mapboxgl from 'mapbox-gl';
 import io, { Socket } from 'socket.io-client';
 import GratitudeForm from './GratitudeForm';
@@ -39,6 +39,28 @@ interface ThankMapProps {
 const socket: Socket = io(API_URL);
 
 // ============================================================================
+// DEBOUNCE UTILITY (if you don't have lodash)
+// ============================================================================
+
+function debounce<T extends (...args: any[]) => any>(
+  func: T,
+  wait: number
+): T & { cancel: () => void } {
+  let timeout: NodeJS.Timeout | null = null;
+
+  const debounced = function (this: any, ...args: Parameters<T>) {
+    if (timeout) clearTimeout(timeout);
+    timeout = setTimeout(() => func.apply(this, args), wait);
+  } as T & { cancel: () => void };
+
+  debounced.cancel = () => {
+    if (timeout) clearTimeout(timeout);
+  };
+
+  return debounced;
+}
+
+// ============================================================================
 // MAIN COMPONENT
 // ============================================================================
 
@@ -49,12 +71,17 @@ export default function ThankMap({ initialFocus }: ThankMapProps) {
   
   // State
   const [gratitudes, setGratitudes] = useState<Gratitude[]>([]);
-  const [selectedGratitudes, setSelectedGratitudes] = useState<Gratitude[]>([]); // Support multiple
+  const [selectedGratitudes, setSelectedGratitudes] = useState<Gratitude[]>([]);
   const [isMapLoaded, setIsMapLoaded] = useState(false);
   const [isAutoPlay, setIsAutoPlay] = useState(false);
   
   // Submission tracking
   const pendingIdRef = useRef<string | null>(null);
+  
+  // 🚨 REQUEST MANAGEMENT
+  const lastBoundsRef = useRef<string>('');
+  const hasInitialDataRef = useRef(false);
+  const requestCountRef = useRef(0); // Debug counter
 
   // ============================================================================
   // PULSING DOT FACTORY
@@ -153,16 +180,53 @@ export default function ThankMap({ initialFocus }: ThankMapProps) {
     return { north, south, east, west };
   };
 
+  // Serialize bounds for comparison (2 decimal places = ~1km precision)
+  const serializeBounds = (bounds: any) => {
+    if (!bounds) return '';
+    return `${bounds.north.toFixed(2)},${bounds.south.toFixed(2)},${bounds.east.toFixed(2)},${bounds.west.toFixed(2)}`;
+  };
+
+  // 🚨 DEBOUNCED BOUNDS EMISSION - CRITICAL FIX
+  const emitMapBounds = useCallback(
+    debounce((bounds: any) => {
+      if (!bounds) return;
+      
+      const boundsKey = serializeBounds(bounds);
+      
+      // Skip if same as last request
+      if (boundsKey === lastBoundsRef.current) {
+        console.log('🛑 Skipping duplicate bounds request');
+        return;
+      }
+      
+      // Skip during autoplay
+      if (isAutoPlay) {
+        console.log('🛑 Skipping bounds request during screensaver');
+        return;
+      }
+      
+      requestCountRef.current += 1;
+      console.log(`📤 Request #${requestCountRef.current} - Bounds:`, boundsKey);
+      
+      lastBoundsRef.current = boundsKey;
+      socket.emit('map_bounds', bounds);
+    }, 500), // 500ms delay after movement stops
+    [isAutoPlay]
+  );
+
   // ============================================================================
   // EFFECT 1: INITIALIZE MAP & SOCKET LISTENERS
   // ============================================================================
 
   useEffect(() => {
+    console.log('🎬 Initializing ThankMap...');
+    
     // --- SOCKET LISTENERS ---
     
     // Initial data load
     socket.on('initial_data', (data: Gratitude[]) => {
       console.log("📦 INITIAL DATA:", data.length, "gratitudes");
+      hasInitialDataRef.current = true;
       const enrichedData = data.map(g => ({
         ...g,
         variant: g.variant !== undefined ? g.variant : (g.id % 10)
@@ -228,6 +292,7 @@ export default function ThankMap({ initialFocus }: ThankMapProps) {
       });
 
       map.on('load', () => {
+        console.log('🗺️  Map loaded');
         setIsMapLoaded(true);
 
         // Add pulsing dot images
@@ -291,19 +356,21 @@ export default function ThankMap({ initialFocus }: ThankMapProps) {
           setSelectedGratitudes([clickedGratitude]);
         });
 
-        // Request initial bounds-based data
-        const bounds = getSafeBounds(map);
-        if (bounds) {
-          socket.emit('map_bounds', bounds);
+        // 🚨 FIX: Only request bounds ONCE on initial load
+        // AND only if we don't already have initial_data
+        if (!hasInitialDataRef.current && map.isStyleLoaded()) {
+          const bounds = getSafeBounds(map);
+          if (bounds) {
+            console.log('📤 Initial bounds request');
+            socket.emit('map_bounds', bounds);
+          }
         }
 
-        // Request updates on map movement
+        // 🚨 FIX: Use DEBOUNCED function for moveend
         map.on('moveend', () => {
-          if (!isAutoPlay) { // Don't update dots during screensaver
-            const bounds = getSafeBounds(map);
-            if (bounds) {
-              socket.emit('map_bounds', bounds);
-            }
+          const bounds = getSafeBounds(map);
+          if (bounds) {
+            emitMapBounds(bounds);
           }
         });
       });
@@ -311,12 +378,14 @@ export default function ThankMap({ initialFocus }: ThankMapProps) {
 
     // Cleanup
     return () => {
+      console.log('🧹 Cleaning up ThankMap...');
+      emitMapBounds.cancel(); // Cancel any pending debounced calls
       mapRef.current?.remove();
       socket.off('initial_data');
       socket.off('update_map_dots');
       socket.off('new_blink');
     };
-  }, []); // Only run once
+  }, [emitMapBounds]); // Include emitMapBounds in dependencies
 
   // ============================================================================
   // EFFECT 2: UPDATE MAP DATA (gratitudes -> GeoJSON)
@@ -381,17 +450,20 @@ export default function ThankMap({ initialFocus }: ThankMapProps) {
       return;
     }
 
+    console.log('🎬 Starting screensaver mode');
     const map = mapRef.current;
     if (!map) return;
 
     let animationFrameId: number;
     let spotlightInterval: NodeJS.Timeout;
 
-    // Camera rotation
+    // 🚨 FIX: Use jumpTo (doesn't trigger moveend events)
     const rotateCamera = () => {
       if (!isAutoPlay) return;
       const currentCenter = map.getCenter();
       const newLng = currentCenter.lng - 0.02;
+      
+      // jumpTo is instant and doesn't fire moveend
       map.jumpTo({ center: [newLng, currentCenter.lat], zoom: 2 });
       animationFrameId = requestAnimationFrame(rotateCamera);
     };
@@ -405,7 +477,6 @@ export default function ThankMap({ initialFocus }: ThankMapProps) {
       });
 
       if (features.length > 0) {
-        // Pick 3 random, unique gratitudes
         const shuffled = [...features].sort(() => Math.random() - 0.5);
         const selected = shuffled.slice(0, Math.min(3, shuffled.length));
 
@@ -432,11 +503,12 @@ export default function ThankMap({ initialFocus }: ThankMapProps) {
     rotateCamera();
 
     // Run spotlight every 5 seconds
-    runSpotlightCycle(); // Run immediately
+    runSpotlightCycle();
     spotlightInterval = setInterval(runSpotlightCycle, 5000);
 
     // Cleanup
     return () => {
+      console.log('⏸️  Stopping screensaver mode');
       cancelAnimationFrame(animationFrameId);
       clearInterval(spotlightInterval);
       map.stop();
@@ -453,12 +525,10 @@ export default function ThankMap({ initialFocus }: ThankMapProps) {
     const map = mapRef.current;
 
     const handleMapClick = (e: mapboxgl.MapMouseEvent) => {
-      // Check if click is on a feature
       const features = map.queryRenderedFeatures(e.point, {
         layers: ['gratitude-layer']
       });
 
-      // If not clicking on a dot and not in autoplay, close cards
       if (features.length === 0 && !isAutoPlay) {
         setSelectedGratitudes([]);
       }
@@ -490,6 +560,18 @@ export default function ThankMap({ initialFocus }: ThankMapProps) {
   };
 
   // ============================================================================
+  // DEBUG: Log request count periodically
+  // ============================================================================
+  
+  useEffect(() => {
+    const interval = setInterval(() => {
+      console.log(`📊 Total DB requests so far: ${requestCountRef.current}`);
+    }, 30000); // Every 30 seconds
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // ============================================================================
   // RENDER
   // ============================================================================
 
@@ -518,7 +600,6 @@ export default function ThankMap({ initialFocus }: ThankMapProps) {
           onClick={() => {
             setIsAutoPlay(!isAutoPlay);
             if (!isAutoPlay) {
-              // Turning on - clear any selected gratitudes
               setSelectedGratitudes([]);
             }
           }}
@@ -544,6 +625,23 @@ export default function ThankMap({ initialFocus }: ThankMapProps) {
           {isAutoPlay ? '⏸️ Screensaver ON' : '▶️ Start Screensaver'}
         </button>
       </div>
+
+      {/* Debug Counter */}
+      {import.meta.env.DEV && (
+        <div style={{
+          position: 'absolute',
+          bottom: '20px',
+          left: '20px',
+          background: 'rgba(0, 0, 0, 0.7)',
+          color: 'white',
+          padding: '10px',
+          borderRadius: '5px',
+          fontSize: '12px',
+          zIndex: 1000
+        }}>
+          DB Requests: {requestCountRef.current}
+        </div>
+      )}
     </div>
   );
 }
